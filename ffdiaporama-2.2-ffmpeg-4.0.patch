@@ -1,0 +1,117 @@
+--- ffDiaporama/src/ffDiaporama/engine/cDeviceModelDef.h	2018-11-17 09:30:03.404590012 +0100
++++ ffDiaporama/src/ffDiaporama/engine/cDeviceModelDef.h	2018-11-17 09:39:14.350457990 +0100
+@@ -60,7 +60,9 @@
+ #include <libavformat/avio.h>
+ 
+ #include "libavfilter/avfilter.h"
+-#include "libavfilter/avfiltergraph.h"
++#if LIBAVFILTER_VERSION_INT < AV_VERSION_INT(3,8,0)
++    #include "libavfilter/avfiltergraph.h"
++#endif
+ 
+ #if (LIBAVUTIL_VERSION_MICRO<100)&&(LIBAVCODEC_VERSION_MICRO<100)&&(LIBAVFORMAT_VERSION_MICRO<100)&&(LIBAVDEVICE_VERSION_MICRO<100)&&(LIBAVFILTER_VERSION_MICRO<100)&&(LIBSWSCALE_VERSION_MICRO<100)
+     #define LIBAV
+--- ffDiaporama/src/ffDiaporama/engine/cBaseMediaFile.cpp	2018-11-17 09:48:42.679631849 +0100
++++ ffDiaporama/src/ffDiaporama/engine/cBaseMediaFile.cpp	2018-11-17 10:01:59.940631230 +0100
+@@ -2939,8 +2939,8 @@
+                  LibavVideoFile->streams[VideoStreamNumber]->codec->sample_aspect_ratio.num,LibavVideoFile->streams[VideoStreamNumber]->codec->sample_aspect_ratio.den
+         );
+ 
+-        AVFilter *srcFilter=avfilter_get_by_name("buffer");
+-        AVFilter *outFilter=avfilter_get_by_name("buffersink");
++        const AVFilter *srcFilter=avfilter_get_by_name("buffer");
++        const AVFilter *outFilter=avfilter_get_by_name("buffersink");
+ 
+         if ((result=avfilter_graph_create_filter(&VideoFilterIn,srcFilter,"in",args,NULL,VideoFilterGraph))<0) {
+             ToLog(LOGMSG_CRITICAL,QString("Error in cVideoFile::VideoFilter_Open : avfilter_graph_create_filter: src"));
+--- ffDiaporama/src/ffDiaporama/engine/_EncodeVideo.cpp	2018-11-18 10:53:58.504781554 +0100
++++ ffDiaporama/src/ffDiaporama/engine/_EncodeVideo.cpp	2018-11-18 10:53:48.699627474 +0100
+@@ -387,7 +387,7 @@
+             ||(!strcmp(Container->oformat->name,"mpegts"))
+             ||(!strcmp(Container->oformat->name,"3gp"))
+         )
+-        (*Stream)->codec->flags|=CODEC_FLAG_GLOBAL_HEADER;
++        (*Stream)->codec->flags|=AV_CODEC_FLAG_GLOBAL_HEADER;
+ 
+     int ThreadC =((getCpuCount()/*-1*/)>1)?(getCpuCount()-1):1;
+     if (ThreadC>0) (*Stream)->codec->thread_count=ThreadC;
+@@ -456,9 +456,9 @@
+         VideoStream->codec->qmax    =ImageHeight<=576?63:51;                av_dict_set(&opts,"qmax",QString("%1").arg(VideoStream->codec->qmax).toUtf8(),0);
+         VideoStream->codec->qmin    =ImageHeight<=576?1:11;                 av_dict_set(&opts,"qmin",QString("%1").arg(VideoStream->codec->qmin).toUtf8(),0);
+         VideoStream->codec->mb_lmin =VideoStream->codec->qmin*FF_QP2LAMBDA;
+-        VideoStream->codec->lmin    =VideoStream->codec->qmin*FF_QP2LAMBDA;
++        av_dict_set_int(&opts, "lmin", VideoStream->codec->qmin*FF_QP2LAMBDA, 0);
+         VideoStream->codec->mb_lmax =VideoStream->codec->qmax*FF_QP2LAMBDA;
+-        VideoStream->codec->lmax    =VideoStream->codec->qmax*FF_QP2LAMBDA;
++        av_dict_set_int(&opts, "lmax", VideoStream->codec->qmax*FF_QP2LAMBDA, 0);
+ 
+         if (ImageHeight<=720) av_dict_set(&opts,"profile","0",0); else av_dict_set(&opts,"profile","1",0);
+         if (ImageHeight>576)  av_dict_set(&opts,"slices","4",0);
+ 
+--- ffDiaporama/src/ffDiaporama/engine/cDeviceModelDef.cpp	2018-11-18 16:06:25.401973984 +0100
++++ ffDiaporama/src/ffDiaporama/engine/cDeviceModelDef.cpp	2018-11-18 16:06:13.522936645 +0100
+@@ -742,16 +742,10 @@
+     //av_log_set_level(AVLOGLEVEL);
+     av_log_set_level(AV_LOG_DEBUG);
+ 
+-    // Check codec to know if they was finded
++    // Check codec to know if they were found
+     AVCodec *p=NULL;
+     while ((p=av_codec_next(p))) {
+-        if (
+-                #if defined(LIBAV) && (LIBAVVERSIONINT<=8)
+-                (p->encode!=NULL)||(p->encode2!=NULL)
+-                #else
+-                (p->encode2!=NULL)
+-                #endif
+-           ) {
++        if (av_codec_is_encoder(p)) {
+             if (p->type==AVMEDIA_TYPE_AUDIO) {
+                 for (int i=0;i<NBR_AUDIOCODECDEF;i++) if ((p->id==AUDIOCODECDEF[i].Codec_id)&&(!AUDIOCODECDEF[i].IsFind)) {
+                     AUDIOCODECDEF[i].IsFind=true;
+@@ -773,31 +767,9 @@
+                 if (QString(p->name)==QString("libxvid")) strcpy(VIDEOCODECDEF[2].ShortName,p->name);
+             }
+         }
+-        if (p->decode!=NULL) {
+-            if (p->type==AVMEDIA_TYPE_AUDIO) {
+-                for (int i=0;i<NBR_AUDIOCODECDEF;i++) if ((p->id==AUDIOCODECDEF[i].Codec_id)&&(!AUDIOCODECDEF[i].IsRead)) {
+-                    AUDIOCODECDEF[i].IsRead=true;
+-                    //strcpy(AUDIOCODECDEF[i].ShortName,p->name);
+-                }
+-                // special case for vorbis codec : if libvorbis is found, prefer it to default internal vorbis encoder
+-                if (QString(p->name)==QString("libvorbis")) strcpy(AUDIOCODECDEF[4].ShortName,p->name);
+-                // special case for aac codec : if libfaac is found, prefer it to default internal aac encoder
+-                if (QString(p->name)==QString("libfaac")) strcpy(AUDIOCODECDEF[2].ShortName,p->name);
+-                // special case for aac codec : if libvo_aacenc is found, prefer it to default internal aac encoder
+-                if (QString(p->name)==QString("libvo_aacenc")) strcpy(AUDIOCODECDEF[2].ShortName,p->name);
+-            }
+-            if (p->type==AVMEDIA_TYPE_VIDEO) {
+-                for (int i=0;i<NBR_VIDEOCODECDEF;i++) if ((p->id==VIDEOCODECDEF[i].Codec_id)&&(!VIDEOCODECDEF[i].IsRead)) {
+-                    VIDEOCODECDEF[i].IsRead=true;
+-                    strcpy(VIDEOCODECDEF[i].ShortName,p->name);
+-                }
+-                // special case for mpeg4 codec : if libxvid is found, prefer it to default mpeg4 internal encoder
+-                if (QString(p->name)==QString("libxvid")) strcpy(VIDEOCODECDEF[2].ShortName,p->name);
+-            }
+-        }
+     }
+ 
+-    // Check format to know if they was finded
++    // Check formats to know if they were found
+     AVOutputFormat *ofmt=NULL;
+     while ((ofmt=av_oformat_next(ofmt))) {
+         for (int i=0;i<VFORMAT_NBR;i++) if (strcmp(ofmt->name,FORMATDEF[i].ShortName)==0) {
+--- ffDiaporama/src/ffDiaporama/wgt_QMultimediaBrowser/QCustomFolderTable.cpp	2018-12-01 19:06:34.757072282 +0100
++++ ffDiaporama/src/ffDiaporama/wgt_QMultimediaBrowser/QCustomFolderTable.cpp	2018-12-01 19:06:45.708103204 +0100
+@@ -926,8 +926,8 @@
+     setUpdatesEnabled(true);
+ 
+     // Start thread to scan files
+-    ScanMediaList.setFuture(QtConcurrent::run(this,&QCustomFolderTable::DoScanMediaList));
+-
++    //ScanMediaList.setFuture(QtConcurrent::run(this,&QCustomFolderTable::DoScanMediaList));
++    QCustomFolderTable::DoScanMediaList();
+     QApplication::restoreOverrideCursor();
+     SaveSettings();
+ }
