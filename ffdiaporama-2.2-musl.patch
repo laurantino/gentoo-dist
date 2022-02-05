@@ -1,0 +1,11 @@
+--- ffDiaporama/src/ffDiaporama/ffDiaporama.pro	2022-02-05 13:57:33.257054400 +0100
++++ ffDiaporama/src/ffDiaporama/ffDiaporama.pro	2022-02-05 13:58:26.565964600 +0100
+@@ -78,7 +78,7 @@
+         LIBS        += -lswresample
+ 
+     } else {
+-
++        DEFINES+=_GNU_SOURCE
+         HARDWARE_PLATFORM = $$system(uname -m)
+         contains(HARDWARE_PLATFORM,x86_64) {
+             DEFINES+=Q_OS_LINUX64
